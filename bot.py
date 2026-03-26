@@ -574,6 +574,44 @@ def main_loop():
                     # mark notified and signal
                     set_last_notified(asset, current_candle_ts)
                     LAST_SIGNAL[asset] = 'buy'
+                elif sig == 'sell':
+                    # automatic sell: attempt to liquidate coin holdings per policy
+                    try:
+                        payload_acc={'access_key':BITHUMB_API_KEY,'nonce':str(uuid.uuid4()),'timestamp':int(time.time()*1000)}
+                        token_acc = _jwt.encode(payload_acc, BITHUMB_API_SECRET, algorithm='HS256')
+                        if isinstance(token_acc,bytes): token_acc=token_acc.decode()
+                        headers_acc={'Authorization':f'Bearer {token_acc}'}
+                        r_acc = requests.get('https://api.bithumb.com/v1/accounts', headers=headers_acc, timeout=10)
+                        accounts = r_acc.json()
+                        krw_avail=0.0
+                        coin_avail=0.0
+                        for it in accounts:
+                            if it.get('currency')=='KRW':
+                                krw_avail = float(it.get('balance') or 0) - float(it.get('locked') or 0)
+                            if it.get('currency')==asset:
+                                coin_avail = float(it.get('balance') or 0) - float(it.get('locked') or 0)
+                        last_price = last_krw if isinstance(last_krw,(int,float)) else None
+                        # decide sell amount in KRW: sell all coin holdings (converted to KRW) after usable_ratio
+                        fee_rate = 0.0025
+                        usable_ratio = 0.995
+                        min_total = 5000
+                        if last_price and coin_avail>0:
+                            sell_krw = int(coin_avail * last_price * usable_ratio)
+                        else:
+                            sell_krw = 0
+                        if sell_krw < min_total:
+                            logging.info('매도 금액(%s KRW) 최소 주문 금액 미만으로 주문 생략 for %s', sell_krw, asset)
+                        else:
+                            market_sym = f"{asset}/KRW"
+                            logging.info('Placing sell for %s amount KRW %s', asset, sell_krw)
+                            order_res = place_order_bithumb(market_sym, 'ask', sell_krw)
+                            if order_res:
+                                send_telegram(f"[실행] SELL {asset} KRW {sell_krw} status {order_res.get('status_code')}")
+                    except Exception as e:
+                        logging.exception('SELL 처리 중 오류: %s', e)
+                    # mark notified and signal
+                    set_last_notified(asset, current_candle_ts)
+                    LAST_SIGNAL[asset] = 'sell'
 # mark this closed candle as seen to avoid reprocessing on next poll
                 LAST_SEEN_CLOSED_CANDLE[asset] = current_candle_ts
                 # 알림전용: 포지션 자동 변경이나 주문 자동 실행은 하지 않습니다.
