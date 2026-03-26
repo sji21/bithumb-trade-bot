@@ -324,10 +324,25 @@ def generate_chart_with_signals(asset, df_ohlcv, signals, out_path):
         # map signals to nearest candle index
         mapped = []
         for s in signals:
-            st = s['time']
-            diffs = [abs((st - t.to_pydatetime()).total_seconds()) for t in ohlc.index]
-            import numpy as np
-            idx = int(np.argmin(np.array(diffs)))
+            # Prefer exact index label (stored as UTC idx_label) if available to avoid off-by-one mapping
+            idx = None
+            if 'idx_label' in s:
+                try:
+                    label_ts = pd.to_datetime(s['idx_label'])
+                    # ensure label_ts is timezone-aware UTC
+                    if label_ts.tzinfo is None:
+                        label_ts = label_ts.tz_localize('UTC')
+                    # find exact match in ohlc.index
+                    matches = [i for i,t in enumerate(ohlc.index) if t == label_ts.tz_convert('Asia/Seoul') or t == label_ts]
+                    if matches:
+                        idx = matches[0]
+                except Exception:
+                    idx = None
+            if idx is None:
+                st = s['time']
+                diffs = [abs((st - t.to_pydatetime()).total_seconds()) for t in ohlc.index]
+                import numpy as np
+                idx = int(np.argmin(np.array(diffs)))
             mapped.append({'idx': idx, 'signal': s['signal'], 'price': s.get('price')})
         # prepare marker coords
         buy_x=[]; buy_y=[]; sell_x=[]; sell_y=[]
