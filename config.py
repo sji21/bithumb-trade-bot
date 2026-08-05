@@ -70,9 +70,11 @@ LIVE_TRADING = _bool_env('ENABLE_LIVE_TRADING', False)
 LIVE_SIMULATION = _bool_env('ENABLE_LIVE_SIMULATION', False)
 
 # ── 전략 · 실행 파라미터 ────────────────────────────────────────────────────
+# alloc = 포트폴리오 배분 비중. 0 이면 차트·신호만 보고 매매하지 않는다(관찰용).
 ASSETS = {
-    'BTC': {'binance': 'BTC/USDT', 'bithumb': 'BTC/KRW'},
-    'ETH': {'binance': 'ETH/USDT', 'bithumb': 'ETH/KRW'},
+    'BTC': {'binance': 'BTC/USDT', 'bithumb': 'BTC/KRW', 'alloc': 0.70},
+    'ETH': {'binance': 'ETH/USDT', 'bithumb': 'ETH/KRW', 'alloc': 0.30},
+    'SOL': {'binance': 'SOL/USDT', 'bithumb': 'SOL/KRW', 'alloc': 0.00},
 }
 
 TIMEFRAME = os.getenv('TIMEFRAME', '4h')
@@ -97,6 +99,27 @@ AUTH_ALERT_INTERVAL_SEC = _int_env('AUTH_ALERT_INTERVAL_SEC', 3600)
 SEND_ON_CANDLE_CLOSE = _bool_env('SEND_ON_CANDLE_CLOSE', True)
 
 KST = 'Asia/Seoul'
+
+# ── 일봉 3신호 비중 전략 ────────────────────────────────────────────────────
+# 백테스트로 채택한 규칙. 4시간봉 EMA 크로스는 시세 확인용으로만 남기고,
+# 실제 판단은 이 일봉 전략을 따른다.
+#   점수 = 0.45×(MA20>MA60) + 0.35×(슈퍼트렌드 상승) + 0.20×(MA50>MA200)
+#   점수 < 0.5 → 0%,  점수 ≥ 0.5 → 점수만큼 (55~100%)
+DAILY_FAST, DAILY_MID = _int_env('DAILY_FAST', 20), _int_env('DAILY_MID', 60)
+DAILY_SLOW_FAST, DAILY_SLOW = _int_env('DAILY_SLOW_FAST', 50), _int_env('DAILY_SLOW', 200)
+ST_PERIOD = _int_env('ST_PERIOD', 10)
+ST_MULT = _float_env('ST_MULT', 3.0)
+
+W_FAST = _float_env('W_FAST', 0.45)     # MA20/60
+W_ST = _float_env('W_ST', 0.35)         # 슈퍼트렌드
+W_SLOW = _float_env('W_SLOW', 0.20)     # MA50/200
+SCORE_FLOOR = _float_env('SCORE_FLOOR', 0.50)
+REBAL_BAND = _float_env('REBAL_BAND', 0.10)
+
+DAILY_CHART_DAYS = _int_env('DAILY_CHART_DAYS', 180)   # 차트에 보여줄 기간
+DAILY_HISTORY_DAYS = _int_env('DAILY_HISTORY_DAYS', 480)  # MA200 워밍업 포함 수집량
+# 일봉은 UTC 00:00 (KST 09:00) 에 마감된다. 그 직후 리포트를 보낸다.
+DAILY_REPORT_DELAY_MIN = _int_env('DAILY_REPORT_DELAY_MIN', 5)
 
 
 def ensure_dirs():

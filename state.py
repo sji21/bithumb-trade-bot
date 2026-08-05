@@ -84,6 +84,22 @@ def mark_handled(handled, asset, candle_ts):
     _write_atomic(config.SIGNAL_STATE_FILE, handled)
 
 
+# ── 일봉 리포트 전송 기록 ───────────────────────────────────────────────────
+_DAILY_FILE = os.path.join(config.STATE_DIR, 'daily_report_sent.json')
+
+
+class _DailySent(dict):
+    """set 할 때마다 디스크에 저장하는 dict."""
+    def __setitem__(self, k, v):
+        super().__setitem__(k, v)
+        _write_atomic(_DAILY_FILE, dict(self))
+
+
+def load_daily_sent():
+    """재시작해도 같은 날 리포트를 두 번 보내지 않도록 마지막 전송일을 읽는다."""
+    return _DailySent(_read(_DAILY_FILE, {}))
+
+
 # ── 전송 기록 ───────────────────────────────────────────────────────────────
 def _send_entry(data, asset, candle_ts):
     bucket = data.get(asset)

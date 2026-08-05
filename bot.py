@@ -14,6 +14,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 import bithumb
 import charting
@@ -149,6 +150,51 @@ def process_asset(asset, symbols, handled, seen):
     seen[asset] = candle_ts
 
 
+def daily_report(sent_dates):
+    """일봉 마감(UTC 00:00 = KST 09:00) 직후 3신호 전략 리포트를 보낸다.
+
+    4시간봉 알림과 별개로 동작한다. 4시간봉은 시세 확인용이고,
+    실제 판단은 이 일봉 리포트를 따른다.
+    """
+    now = datetime.now(timezone.utc)
+    if now.hour == 0 and now.minute < config.DAILY_REPORT_DELAY_MIN:
+        return                                  # 거래소 데이터가 정착할 시간을 준다
+    today = now.date().isoformat()
+    if sent_dates.get('daily') == today:
+        return
+
+    rows, charts = [], []
+    for asset, meta in config.ASSETS.items():
+        df = market.fetch_ohlcv(meta['binance'], timeframe='1d',
+                                limit=config.DAILY_HISTORY_DAYS)
+        if df is None:
+            logging.warning('%s 일봉 조회 실패 — 리포트 보류', asset)
+            return
+        df = market.drop_unclosed(df, hours=24)
+        if df is None or len(df) < config.DAILY_SLOW + 5:
+            logging.warning('%s 일봉이 부족합니다 (%s개)', asset, 0 if df is None else len(df))
+            return
+        ds = strategy.analyze_daily(df)
+        st = strategy.daily_state(ds)
+        ticker = bithumb.fetch_ticker(meta['bithumb'])
+        rows.append((asset, meta['alloc'], st, ticker['last'] if ticker else None))
+
+        path = os.path.join(config.CHART_DIR, f'{asset}_daily.png')
+        if charting.render_daily(asset, df, ds, path, alloc=meta['alloc']):
+            charts.append((asset, path, st, meta['alloc']))
+
+    accounts = bithumb.fetch_accounts()
+    if not notify.send_text(report.build_daily(rows, accounts)):
+        logging.warning('일봉 리포트 전송 실패 — 다음 폴링에서 재시도')
+        return
+    for asset, path, st, alloc in charts:
+        tag = '관찰용' if not alloc else f'전체 {alloc*st["weight"]*100:.0f}%'
+        notify.send_photo(path, f'{asset} 일봉 · 비중 {st["weight"]*100:.0f}% · {tag}')
+
+    sent_dates['daily'] = today
+    logging.info('일봉 리포트 전송 완료 (%s)', today)
+
+
 def main():
     if not acquire_lock():
         print('이미 실행 중입니다. 종료합니다.', file=sys.stderr)
@@ -159,15 +205,21 @@ def main():
                  config.mode_label(), config.POLL_INTERVAL_SEC, ', '.join(config.ASSETS))
 
     handled = state.load_handled_candles()
-    seen = {}
+    seen, sent_dates = {}, state.load_daily_sent()
 
     while True:
         try:
             for asset, symbols in config.ASSETS.items():
+                if not symbols.get('alloc'):
+                    continue          # 배분 0 인 자산은 4시간봉 매매 대상이 아니다
                 try:
                     process_asset(asset, symbols, handled, seen)
                 except Exception:
                     logging.exception('%s 처리 중 오류', asset)
+            try:
+                daily_report(sent_dates)
+            except Exception:
+                logging.exception('일봉 리포트 오류')
             time.sleep(config.POLL_INTERVAL_SEC)
         except KeyboardInterrupt:
             logging.info('사용자 중단. 종료합니다.')

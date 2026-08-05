@@ -156,6 +156,70 @@ def build_caption(asset, ind, signal, last_krw):
     )
 
 
+def build_daily(rows, accounts=None):
+    """일봉 3신호 전략 리포트.
+
+    rows: [(asset, alloc, state_dict, last_krw), ...]
+    state_dict 는 strategy.daily_state() 결과.
+    """
+    now = datetime.now(timezone.utc).astimezone()
+    lines = [f'📐 *일봉 전략 리포트*  ·  {now:%Y-%m-%d %H:%M}', '']
+
+    total_target = 0.0
+    changed = []
+    for asset, alloc, st, last_krw in rows:
+        mark = lambda b: '🟢' if b else '🔴'
+        w = st['weight']
+        pw = st['prev_weight']
+        arrow = ''
+        if pw is not None and abs(w - pw) > 1e-9:
+            arrow = f'  ← {pw*100:.0f}% 에서 변경'
+            changed.append(asset)
+        if alloc:
+            total_target += alloc * w
+            head = f'*{asset}*  배분 {alloc:.0%}  ·  비중 `{w*100:.0f}%`  →  전체 `{alloc*w*100:.0f}%`{arrow}'
+        else:
+            head = f'*{asset}*  _관찰용_  ·  비중 `{w*100:.0f}%`{arrow}'
+        lines.append(head)
+        lines.append(
+            f'   {mark(st["fast"])} 단기  {mark(st["st"])} 슈퍼트렌드  {mark(st["slow"])} 장기'
+            f'   ·  점수 `{st["score"]:.2f}`  ·  RSI `{st["rsi"]:.0f}`'
+        )
+        if last_krw:
+            lines.append(f'   현재가 `{last_krw:,.0f} KRW`')
+        lines.append('')
+
+    lines.append(f'*목표 총 노출* `{total_target*100:.0f}%`  ·  현금 `{(1-total_target)*100:.0f}%`')
+
+    if accounts is not None:
+        krw = bithumb.available(accounts, 'KRW')
+        holdings, total = [], krw
+        for asset, alloc, st, last_krw in rows:
+            q = bithumb.available(accounts, asset)
+            v = q * last_krw if (q and last_krw) else 0.0
+            total += v
+            if v > 0:
+                holdings.append((asset, alloc, v))
+        lines += ['', '*현재 보유*', f'   총 `{total:,.0f} KRW`  (현금 `{krw:,.0f}`)']
+        for asset, alloc, v in holdings:
+            cur_pct = v/total*100 if total else 0
+            tgt = next((a*s['weight']*100 for as_, a, s, _ in rows if as_ == asset), 0)
+            gap = (tgt - cur_pct)/100*total
+            note = ''
+            if alloc:
+                note = (f'  → 목표 {tgt:.0f}%  ({gap:+,.0f} KRW)'
+                        if abs(gap) >= config.MIN_ORDER_KRW else '  → 목표 근처')
+            lines.append(f'   {asset} `{v:,.0f}` ({cur_pct:.0f}%){note}')
+
+    if changed:
+        lines += ['', f'⚠️ *조정 필요* — {", ".join(changed)} 비중이 바뀌었습니다']
+    else:
+        lines += ['', '_비중 변동 없음 — 조치 불필요_']
+
+    lines += ['', f'_모드: {config.mode_label()} · 주문은 수동_']
+    return '\n'.join(lines)
+
+
 def build_order_result(asset, side, result, detail):
     """주문 실행 결과 메시지."""
     if result is None:

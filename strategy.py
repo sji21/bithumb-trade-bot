@@ -105,6 +105,91 @@ def signal_history(df, ind, tz=config.KST):
     return out
 
 
+# ── 일봉 3신호 비중 전략 ────────────────────────────────────────────────────
+DailySignals = namedtuple(
+    'DailySignals',
+    'close ma_fast ma_mid ma_slow_fast ma_slow bb_up bb_lo rsi vol '
+    'st_up st_line sig_fast sig_slow sig_st score weight',
+)
+
+
+def supertrend(df, period=None, mult=None):
+    """ATR 기반 슈퍼트렌드. (상승 여부 시리즈, 추세선 시리즈)."""
+    period = period or config.ST_PERIOD
+    mult = mult if mult is not None else config.ST_MULT
+    high, low, close = (df[k].astype(float) for k in ('high', 'low', 'close'))
+    hl2 = (high + low) / 2
+    prev = close.shift(1)
+    tr = pd.concat([high - low, (high - prev).abs(), (low - prev).abs()], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1 / period, adjust=False).mean()
+    upper, lower = hl2 + mult * atr, hl2 - mult * atr
+
+    fu, fl = upper.copy(), lower.copy()
+    for i in range(1, len(close)):
+        fu.iloc[i] = (upper.iloc[i] if (upper.iloc[i] < fu.iloc[i-1]
+                                        or close.iloc[i-1] > fu.iloc[i-1]) else fu.iloc[i-1])
+        fl.iloc[i] = (lower.iloc[i] if (lower.iloc[i] > fl.iloc[i-1]
+                                        or close.iloc[i-1] < fl.iloc[i-1]) else fl.iloc[i-1])
+
+    up = pd.Series(True, index=close.index)
+    line = pd.Series(float('nan'), index=close.index)
+    for i in range(1, len(close)):
+        if close.iloc[i] > fu.iloc[i-1]:
+            up.iloc[i] = True
+        elif close.iloc[i] < fl.iloc[i-1]:
+            up.iloc[i] = False
+        else:
+            up.iloc[i] = up.iloc[i-1]
+        line.iloc[i] = fl.iloc[i] if up.iloc[i] else fu.iloc[i]
+    return up, line
+
+
+def analyze_daily(df):
+    """일봉 3신호와 목표 비중을 계산한다.
+
+    신호는 모두 shift(1) 로 전일 확정값을 쓴다. 당일 종가로 판단하면
+    미래를 참조하게 된다.
+    """
+    c = df['close'].astype(float)
+    ma_fast = c.rolling(config.DAILY_FAST).mean()
+    ma_mid = c.rolling(config.DAILY_MID).mean()
+    ma_sf = c.rolling(config.DAILY_SLOW_FAST).mean()
+    ma_slow = c.rolling(config.DAILY_SLOW).mean()
+    sd = c.rolling(config.DAILY_FAST).std()
+    st_up, st_line = supertrend(df)
+
+    sig_fast = (ma_fast > ma_mid).shift(1)
+    sig_slow = (ma_sf > ma_slow).shift(1)
+    sig_st = st_up.shift(1)
+    score = (sig_fast.astype(float) * config.W_FAST
+             + sig_st.astype(float) * config.W_ST
+             + sig_slow.astype(float) * config.W_SLOW)
+    weight = score.where(score >= config.SCORE_FLOOR - 1e-9, 0.0)
+
+    return DailySignals(
+        close=c, ma_fast=ma_fast, ma_mid=ma_mid, ma_slow_fast=ma_sf, ma_slow=ma_slow,
+        bb_up=ma_fast + 2 * sd, bb_lo=ma_fast - 2 * sd,
+        rsi=_rsi(c, config.RSI_PERIOD), vol=df['vol'].astype(float),
+        st_up=st_up, st_line=st_line,
+        sig_fast=sig_fast, sig_slow=sig_slow, sig_st=sig_st,
+        score=score, weight=weight,
+    )
+
+
+def daily_state(ds):
+    """마지막 일봉 기준 현재 상태. 리포트용 dict."""
+    return {
+        'fast': bool(ds.sig_fast.iloc[-1]),
+        'slow': bool(ds.sig_slow.iloc[-1]),
+        'st': bool(ds.sig_st.iloc[-1]),
+        'score': float(ds.score.iloc[-1]),
+        'weight': float(ds.weight.iloc[-1]),
+        'prev_weight': float(ds.weight.iloc[-2]) if len(ds.weight) > 1 else None,
+        'rsi': float(ds.rsi.iloc[-1]),
+        'close': float(ds.close.iloc[-1]),
+    }
+
+
 def last_signal_before(ind, offset=1):
     """마지막 캔들 이전의 가장 최근 신호. (인덱스 라벨, 신호, 종가) 또는 None."""
     sigs = ind.signal.iloc[:-offset] if offset else ind.signal
