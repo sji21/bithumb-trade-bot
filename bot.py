@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 import bithumb
 import charting
 import config
+import journal
 import market
 import notify
 import report
@@ -211,6 +212,15 @@ def daily_report(sent_dates):
 
     sent_dates['daily'] = today
     logging.info('일봉 리포트 전송 완료 (%s)', today)
+
+    # 관찰 일지에 자동 기록한다(docs/rehearsal.md). 손으로 매일 치면 6개월을
+    # 못 간다. 집행 여부와 미집행 사유만 사람이 채운다.
+    try:
+        traded = [r for r in rows if r[1]]          # 배분 0 인 관찰용 종목은 뺀다
+        if traded and journal.record(traded, accounts, quiet=True):
+            logging.info('관찰 일지 기록 (%s)', today)
+    except Exception:                                # noqa: BLE001
+        logging.exception('관찰 일지 기록 실패 — 리포트는 이미 나갔다')
 
 
 def main():

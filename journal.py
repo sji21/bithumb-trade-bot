@@ -68,19 +68,18 @@ def current_weights(accounts, rows):
     return {a: v / total for a, v in vals.items()} if total else {}
 
 
-def append(note='', use_accounts=True):
-    accounts = None
-    if use_accounts:
-        try:
-            import bithumb
-            accounts = bithumb.fetch_accounts()
-        except Exception as e:                      # noqa: BLE001
-            print(f'잔고 조회 실패 ({e}) — 현재 비중은 비워 둔다', file=sys.stderr)
+def record(rows, accounts, note='', quiet=False):
+    """계산된 상태를 CSV 한 줄로 남긴다. 봇의 일봉 리포트에서도 부른다.
 
-    rows = today_rows()
-    if not rows:
-        print('기록할 종목이 없다', file=sys.stderr)
-        return
+    rows: [(asset, alloc, daily_state, last_krw), ...] — 배분 0 인 종목은 뺀 것.
+    같은 날짜가 이미 있으면 아무것도 하지 않는다(폴링이 여러 번 돌아도 안전).
+    """
+    date = datetime.now(ZoneInfo(config.KST)).strftime('%Y-%m-%d')
+    if os.path.exists(PATH):
+        with open(PATH, encoding='utf-8') as f:
+            if any(r['date'] == date for r in csv.DictReader(f)):
+                return False
+
     cur = current_weights(accounts, rows)
     total_krw = None
     if cur:
@@ -88,7 +87,6 @@ def append(note='', use_accounts=True):
         total_krw = bithumb.available(accounts, 'KRW') + sum(
             bithumb.available(accounts, a) * krw for a, _, _, krw in rows)
 
-    date = datetime.now(ZoneInfo(config.KST)).strftime('%Y-%m-%d')
     is_new_file = not os.path.exists(PATH)
     breached = False
     with open(PATH, 'a', newline='', encoding='utf-8') as f:
@@ -115,6 +113,8 @@ def append(note='', use_accounts=True):
                 'fill_price': '' if krw is None else f'{krw:.0f}',
                 'fee_krw': '', 'violation': '', 'note': note,
             })
+            if quiet:
+                continue
             mark = {None: '?', True: '·', False: '⚠️'}[inband]
             line = f'{mark} {asset}  점수 {st["score"]:.2f}  목표 {tgt*100:.0f}%'
             if c is not None:
@@ -123,12 +123,33 @@ def append(note='', use_accounts=True):
                     line += f'  → {gap*total_krw:+,.0f} KRW'
             print(line)
 
+    if quiet:
+        return True
     print(f'\n{PATH}')
     if breached:
         print('밴드를 벗어났다. 집행하기 전에 이 줄부터 채울 것 '
               '(docs/rehearsal.md — 먼저 기록하고 나중에 집행한다)')
     elif not cur:
         print('잔고를 못 읽어 현재 비중이 비어 있다. --no-accounts 였거나 조회 실패다')
+    return True
+
+
+def append(note='', use_accounts=True):
+    """CLI 진입점. 시세와 잔고를 직접 받아 기록한다."""
+    accounts = None
+    if use_accounts:
+        try:
+            import bithumb
+            accounts = bithumb.fetch_accounts()
+        except Exception as e:                      # noqa: BLE001
+            print(f'잔고 조회 실패 ({e}) — 현재 비중은 비워 둔다', file=sys.stderr)
+
+    rows = today_rows()
+    if not rows:
+        print('기록할 종목이 없다', file=sys.stderr)
+        return
+    if not record(rows, accounts, note):
+        print('오늘 기록이 이미 있다')
 
 
 def show(n=20):
