@@ -86,13 +86,16 @@ launchctl kickstart -k gui/$(id -u)/ai.tradebot.bot   # 재시작
 프로토콜은 [rehearsal.md](docs/rehearsal.md).
 
 ```bash
-python3 journal.py                  # 오늘 신호를 journal.csv 에 기록
-python3 journal.py --show           # 최근 기록
+python3 journal.py --act            # 밴드 이탈 건에 답한다 (집행하기 전에)
+python3 journal.py --violation      # 신호 없이 사고팔았을 때
 python3 journal.py --summary        # 밴드 이탈·집행률·규칙 위반 집계
+python3 journal.py --show           # 최근 기록
 ```
 
-밴드를 벗어난 날은 지시 금액이 자동으로 채워진다. **집행 여부와 미집행
-사유는 사람이 적는다** — 집행한 뒤에 적으면 결과에 맞춰 이유를 지어내게 된다.
+평소에는 아무것도 안 해도 된다. 매일 09:01 리포트가 나가면서 봇이 기록한다.
+**`--act` 만 사람이 부른다** — 리포트에 `⚠️ 리밸런싱` 이 뜬 날, 6개월에 3~7번.
+
+`--act` 는 집행 **전에** 부른다. 집행한 뒤에 적으면 결과에 맞춰 이유가 바뀐다.
 
 `journal.csv` 는 실제 보유 비중이 들어가므로 gitignore 되어 있다.
 

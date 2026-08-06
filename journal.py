@@ -152,6 +152,106 @@ def append(note='', use_accounts=True):
         print('오늘 기록이 이미 있다')
 
 
+def _ask(prompt, default=''):
+    try:
+        v = input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print('\n중단. 지금까지 답한 것은 저장하지 않는다.')
+        raise SystemExit(1)
+    return v or default
+
+
+def _write_all(rows):
+    with open(PATH, 'w', newline='', encoding='utf-8') as f:
+        w = csv.DictWriter(f, fieldnames=FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+
+
+def act():
+    """밴드를 벗어났는데 아직 집행 여부를 안 적은 줄을 채운다.
+
+    결과를 알기 전에 적는 것이 요점이다. 집행한 뒤에 적으면 이유가 결과에
+    맞춰 바뀐다 — 그래서 이 명령은 '집행 전에' 부르는 것을 전제로 한다.
+    """
+    if not os.path.exists(PATH):
+        print('아직 기록이 없다'); return
+    with open(PATH, encoding='utf-8') as f:
+        rows = list(csv.DictReader(f))
+
+    pending = [r for r in rows if r['band'] == 'OUT' and not r['executed'].strip()]
+    if not pending:
+        print('채울 것이 없다. 밴드를 벗어난 날만 기록하면 된다.')
+        return
+
+    print(f'답할 것 {len(pending)}건. 집행하기 *전에* 답하는 것이 맞다.\n')
+    for r in pending:
+        amt = r['instructed_krw']
+        side = '매수' if amt.startswith('+') else '매도'
+        print(f'── {r["date"]}  {r["asset"]}  '
+              f'목표 {r["target_pct"]}% / 현재 {r["current_pct"]}%  '
+              f'→ {side} {abs(float(amt or 0)):,.0f} KRW')
+
+        print('   1) 집행했다')
+        print('   2) 집행 안 했다 — 내 판단으로            (규칙 위반으로 기록된다)')
+        print('   3) 집행 못 했다 — 외부 사유              (위반 아님)')
+        print('   s) 건너뛰기')
+        c = _ask('   > ')
+
+        if c == 's':
+            print()
+            continue
+        if c == '1':
+            r['executed'] = 'y'
+            r['executed_krw'] = _ask('   실제 금액 (엔터 = 지시대로): ', amt)
+            r['fill_price'] = _ask(f'   체결가 (엔터 = {r["fill_price"]}): ', r['fill_price'])
+            r['fee_krw'] = _ask('   수수료: ')
+            r['note'] = _ask('   메모 (선택): ', r['note'])
+        elif c == '2':
+            r['executed'] = 'n'
+            r['violation'] = '신호무시'
+            print('   왜 안 하셨나요? 솔직할수록 데이터가 됩니다.')
+            print('   (예: 며칠 더 오를 것 같아서 / 무서워서 / 손실 확정하기 싫어서)')
+            r['note'] = _ask('   > ')
+        elif c == '3':
+            r['executed'] = 'n'
+            print('   사유는? (예: 거래소 점검 / 최소 주문금액 미만 / 입금 대기)')
+            r['note'] = _ask('   > ')
+        else:
+            print('   못 알아들었다. 건너뛴다.\n')
+            continue
+        print()
+
+    _write_all(rows)
+    print(f'{PATH} 에 저장했다.')
+    viol = sum(1 for r in rows if r['violation'].strip())
+    if viol:
+        print(f'누적 규칙 위반 {viol}건. 3건이 되면 docs/rehearsal.md 의 '
+              f'"그만두는 조건" 을 볼 것.')
+
+
+def violation():
+    """신호가 없는데 사고팔았을 때. 밴드 이탈과 무관한 위반을 남긴다."""
+    date = datetime.now(ZoneInfo(config.KST)).strftime('%Y-%m-%d')
+    print('신호 없이 한 매매를 기록한다.')
+    asset = _ask('   종목 (BTC/ETH): ').upper()
+    print('   1) 임의 익절   2) 임의 진입   3) 금액 변경   4) 조기 개입')
+    kind = {'1': '임의익절', '2': '임의진입', '3': '금액변경', '4': '조기개입'}.get(_ask('   > '))
+    if not kind:
+        print('   취소'); return
+    why = _ask('   왜 그랬나요? ')
+
+    is_new = not os.path.exists(PATH)
+    with open(PATH, 'a', newline='', encoding='utf-8') as f:
+        w = csv.DictWriter(f, fieldnames=FIELDS)
+        if is_new:
+            w.writeheader()
+        w.writerow({k: '' for k in FIELDS} | {
+            'date': date, 'asset': asset, 'band': '',
+            'executed': 'y', 'violation': kind, 'note': why})
+    print(f'기록했다. {PATH}')
+
+
 def show(n=20):
     if not os.path.exists(PATH):
         print('아직 기록이 없다'); return
@@ -208,12 +308,20 @@ def summary():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument('--act', action='store_true',
+                    help='밴드 이탈 건의 집행 여부를 묻고 채운다 (집행 전에)')
+    ap.add_argument('--violation', action='store_true',
+                    help='신호 없이 한 매매를 기록한다')
     ap.add_argument('--note', default='', help='메모')
     ap.add_argument('--show', action='store_true', help='최근 기록')
     ap.add_argument('--summary', action='store_true', help='집계')
     ap.add_argument('--no-accounts', action='store_true', help='잔고 조회 생략')
     a = ap.parse_args()
-    if a.show:
+    if a.act:
+        act()
+    elif a.violation:
+        violation()
+    elif a.show:
         show()
     elif a.summary:
         summary()
