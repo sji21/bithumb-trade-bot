@@ -69,6 +69,12 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 LIVE_TRADING = _bool_env('ENABLE_LIVE_TRADING', False)
 LIVE_SIMULATION = _bool_env('ENABLE_LIVE_SIMULATION', False)
 
+# 4시간봉 EMA 크로스 매매는 폐기된 전략이다. 백테스트에서 수수료 0% 에서도
+# 기대값이 음수였고(docs/research-log.md), 현재 채택 전략은 일봉 3신호다.
+# 4시간 알림은 시세 확인용으로 남기되 주문 경로는 이 플래그로 잠가 둔다.
+# LIVE_TRADING 만 켜서는 옛 전략이 주문을 내지 못한다.
+LEGACY_EMA_EXECUTION = _bool_env('ENABLE_LEGACY_EMA_EXECUTION', False)
+
 # ── 전략 · 실행 파라미터 ────────────────────────────────────────────────────
 # alloc = 포트폴리오 배분 비중. 0 이면 차트·신호만 보고 매매하지 않는다(관찰용).
 ASSETS = {

@@ -127,6 +127,129 @@ def buy_and_hold(df):
     }
 
 
+def simulate_daily(df, fee=None):
+    """일봉 3신호 비중 전략. 채택 전략의 재현 엔트리.
+
+    목표 비중이 바뀔 때만 그 차이만큼 조정한다. 차이가 REBAL_BAND 미만이면
+    손대지 않는다 — 봇의 리포트 규칙과 같다.
+    """
+    fee = config.FEE_RATE if fee is None else fee
+    ds = strategy.analyze_daily(df)
+    close = df['close'].astype(float)
+    weight = ds.weight.fillna(0.0).clip(0.0, 1.0)
+
+    cash, coin, held_w = INITIAL_CAPITAL, 0.0, 0.0
+    equity, n_rebal, fees_paid = [], 0, 0.0
+
+    for price, target in zip(close, weight):
+        price, target = float(price), float(target)
+        value = cash + coin * price
+        if abs(target - held_w) >= config.REBAL_BAND:
+            want = value * target
+            have = coin * price
+            delta = want - have
+            if abs(delta) >= 1e-9:
+                traded = abs(delta)
+                fees_paid += traded * fee
+                if delta > 0:
+                    spend = min(delta, cash / (1 + fee))
+                    coin += spend / price
+                    cash -= spend * (1 + fee)
+                else:
+                    coin += delta / price          # delta < 0 → 매도
+                    cash += -delta * (1 - fee)
+                n_rebal += 1
+            held_w = target
+        equity.append(cash + coin * price)
+
+    curve = pd.Series(equity, index=close.index)
+    peak = curve.cummax()
+    final = float(curve.iloc[-1])
+    return {
+        'final': final,
+        'return_pct': (final / INITIAL_CAPITAL - 1) * 100,
+        'max_dd': float(((curve - peak) / peak * 100).min()),
+        'n_rebal': n_rebal,
+        'exposure': float(weight.mean()),
+        'fees_paid': fees_paid,
+        'curve': curve,
+    }
+
+
+def fee_drag(df):
+    """수수료가 실제로 갉아먹은 몫. 같은 전략을 0% 로 돌려 차이를 본다.
+
+    누적 수수료액을 초기자본으로 나누면 안 된다. 자산이 40배 불어난 구간에서
+    낸 수수료를 초기자본 기준으로 환산하면 400% 같은 값이 나온다.
+    """
+    with_fee = simulate_daily(df)
+    without = simulate_daily(df, fee=0.0)
+    return without['return_pct'] - with_fee['return_pct']
+
+
+def run_daily(asset, symbol, days):
+    """채택 전략(일봉 3신호) 백테스트. 문서 숫자를 재현하는 엔트리."""
+    df = fetch_history(symbol, days, timeframe='1d')
+    need = strategy.required_bars()
+    if df.empty or len(df) < need:
+        print(f'{asset}: 데이터 부족 ({len(df)}/{need}봉)')
+        return None
+    r = simulate_daily(df)
+    bh = buy_and_hold(df)
+    start, end = df.index[0], df.index[-1]
+    print(f'\n{"="*66}')
+    print(f'{asset}  일봉 3신호  {start:%Y-%m-%d} ~ {end:%Y-%m-%d}  ({len(df)}봉)')
+    print(f'수수료 편도 {config.FEE_RATE:.2%}  ·  리밸런싱 밴드 {config.REBAL_BAND:.0%}')
+    print('='*66)
+    print(f'{"":<22}{"수익률":>12}{"MDD":>10}{"거래":>7}{"노출":>8}')
+    print('-'*66)
+    print(f'{"일봉 3신호":<22}{r["return_pct"]:>11.1f}%{r["max_dd"]:>9.1f}%'
+          f'{r["n_rebal"]:>7}{r["exposure"]*100:>7.0f}%')
+    print(f'{"단순 보유":<22}{bh["return_pct"]:>11.1f}%{bh["max_dd"]:>9.1f}%{"-":>7}{"100":>7}%')
+    print('-'*66)
+    print(f'수수료 부담 {fee_drag(df):.1f}%p (0% 대비)  ·  '
+          f'MDD 개선 {bh["max_dd"] - r["max_dd"]:+.1f}%p')
+    return {'asset': asset, 'daily': r, 'bh': bh, 'df': df}
+
+
+def run_portfolio(days, weights=None, fee=None):
+    """BTC/ETH 배분 포트폴리오. docs 의 표를 재현하는 엔트리."""
+    weights = weights or {a: v['alloc'] for a, v in config.ASSETS.items() if v['alloc']}
+    fee = config.FEE_RATE if fee is None else fee
+    curves, holds = {}, {}
+    for asset, alloc in weights.items():
+        df = fetch_history(config.ASSETS[asset]['binance'], days, timeframe='1d')
+        if df.empty or len(df) < strategy.required_bars():
+            print(f'{asset}: 데이터 부족'); return None
+        curves[asset] = simulate_daily(df, fee=fee)['curve'] / INITIAL_CAPITAL
+        holds[asset] = df['close'].astype(float) / float(df['close'].iloc[0])
+
+    idx = None
+    for c in curves.values():
+        idx = c.index if idx is None else idx.intersection(c.index)
+    strat = sum(curves[a].reindex(idx) * w for a, w in weights.items())
+    hold = sum(holds[a].reindex(idx) * w for a, w in weights.items())
+
+    def stat(e):
+        pk = e.cummax()
+        return (e.iloc[-1] - 1) * 100, float(((e - pk) / pk * 100).min())
+
+    sr, sd = stat(strat)
+    hr, hd = stat(hold)
+    alloc_txt = ' / '.join(f'{a} {w:.0%}' for a, w in weights.items())
+    print(f'\n{"="*66}')
+    print(f'포트폴리오  {alloc_txt}  ·  {idx[0]:%Y-%m-%d} ~ {idx[-1]:%Y-%m-%d}')
+    print(f'수수료 편도 {fee:.2%}  ·  리밸런싱 밴드 {config.REBAL_BAND:.0%}')
+    print('='*66)
+    print(f'{"":<22}{"수익률":>12}{"MDD":>10}')
+    print('-'*66)
+    print(f'{"일봉 3신호":<22}{sr:>11.1f}%{sd:>9.1f}%')
+    print(f'{"단순 보유":<22}{hr:>11.1f}%{hd:>9.1f}%')
+    print('-'*66)
+    print(f'MDD 개선 {hd - sd:+.1f}%p')
+    return {'strat': strat, 'hold': hold}
+
+
 def run(asset, symbol, days):
     df = fetch_history(symbol, days)
     if df.empty or len(df) < config.EMA_SLOW + 2:
@@ -165,11 +288,22 @@ def run(asset, symbol, days):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--days', type=int, default=180)
+    ap = argparse.ArgumentParser(
+        description='기본은 채택 전략(일봉 3신호). --legacy 로 폐기된 EMA 크로스도 볼 수 있다.')
+    ap.add_argument('--days', type=int, default=2190)
+    ap.add_argument('--legacy', action='store_true',
+                    help='폐기된 4시간봉 EMA 크로스 백테스트')
+    ap.add_argument('--portfolio', action='store_true',
+                    help='BTC/ETH 배분 포트폴리오 (docs 표 재현)')
     args = ap.parse_args()
+    if args.portfolio:
+        run_portfolio(args.days)
+        return 0
     for asset, syms in config.ASSETS.items():
-        run(asset, syms['binance'], args.days)
+        if args.legacy:
+            run(asset, syms['binance'], args.days)
+        else:
+            run_daily(asset, syms['binance'], args.days)
     return 0
 
 

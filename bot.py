@@ -67,27 +67,37 @@ def _order_for_sell(asset, accounts, last_krw):
 
 
 def execute_signal(asset, symbol, signal, accounts, last_krw, candle_ts):
-    """신호에 따라 주문을 낸다. 결과 메시지를 반환(없으면 None)."""
+    """신호에 따라 주문을 낸다.
+
+    (settled, message) 를 반환한다. settled 가 False 면 일시적 실패라
+    이 캔들을 처리 완료로 기록하면 안 된다 — 기록해 버리면 잔고 조회 실패나
+    네트워크 오류 한 번에 그 신호를 영영 건너뛴다.
+    """
     if accounts is None:
         logging.warning('%s: 잔고 조회 실패로 %s 주문 생략', asset, signal.upper())
-        return f'⚠️ *{asset} {signal.upper()} 생략* — 잔고 조회 실패'
+        return False, f'⚠️ *{asset} {signal.upper()} 생략* — 잔고 조회 실패'
 
     if signal == 'buy':
         spend, detail = _order_for_buy(asset, accounts, last_krw)
         if spend is None:
             logging.info('%s: %s', asset, detail)
-            return None
+            return True, None          # 낼 주문이 없는 것은 정상 종료
         result = bithumb.place_market_order(symbol, 'bid', krw=spend)
     else:
         volume, detail = _order_for_sell(asset, accounts, last_krw)
         if volume is None:
             logging.info('%s: %s', asset, detail)
-            return None
+            return True, None
         result = bithumb.place_market_order(symbol, 'ask', volume=volume)
 
-    if result is None and not config.LIVE_TRADING:
-        return None
-    return report.build_order_result(asset, signal, result, detail)
+    if result is None:
+        if not config.LIVE_TRADING:
+            return True, None          # 애초에 주문을 낼 생각이 없었다
+        return False, report.build_order_result(asset, signal, None, detail)
+
+    status = result.get('status_code')
+    ok = bool(result.get('mock')) or (isinstance(status, int) and status < 400)
+    return ok, report.build_order_result(asset, signal, result, detail)
 
 
 def process_asset(asset, symbols, handled, seen):
@@ -134,16 +144,24 @@ def process_asset(asset, symbols, handled, seen):
             state.mark_sent(asset, candle_ts, 'text')
 
     # ── 주문 ────────────────────────────────────────────────────────────
-    if signal:
+    if signal and not config.LEGACY_EMA_EXECUTION:
+        # 폐기된 전략이다. 알림만 보내고 주문은 내지 않는다.
+        logging.info('%s: %s 신호 — 레거시 EMA 실행이 꺼져 있어 주문 생략',
+                     asset, signal.upper())
+    elif signal:
         # 재시작 방어: 캔들 진행 중 프로세스가 죽으면 launchd 가 되살리는데,
         # 메모리 기록만으로는 같은 신호에 주문이 다시 나간다.
         if handled.get(asset) == candle_ts:
             logging.info('%s: 캔들 %s 의 %s 신호는 이미 처리됨 — 주문 생략',
                          asset, candle_ts, signal.upper())
         else:
-            message = execute_signal(asset, symbols['bithumb'], signal,
-                                     accounts, last_krw, candle_ts)
-            state.mark_handled(handled, asset, candle_ts)
+            settled, message = execute_signal(asset, symbols['bithumb'], signal,
+                                              accounts, last_krw, candle_ts)
+            if settled:
+                state.mark_handled(handled, asset, candle_ts)
+            else:
+                logging.warning('%s: %s 주문 미확정 — 다음 주기에 재시도',
+                                asset, signal.upper())
             if message:
                 notify.send_text(message)
 

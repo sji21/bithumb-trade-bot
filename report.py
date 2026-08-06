@@ -166,7 +166,7 @@ def build_daily(rows, accounts=None):
     lines = [f'📐 *일봉 전략 리포트*  ·  {now:%Y-%m-%d %H:%M}', '']
 
     total_target = 0.0
-    changed = []
+    changed, short = [], []
     for asset, alloc, st, last_krw in rows:
         mark = lambda b: '🟢' if b else '🔴'
         w = st['weight']
@@ -175,6 +175,8 @@ def build_daily(rows, accounts=None):
         if pw is not None and abs(w - pw) > 1e-9:
             arrow = f'  ← {pw*100:.0f}% 에서 변경'
             changed.append(asset)
+        if st.get('insufficient'):
+            short.append(f"{asset} {st['bars']}/{st['bars_needed']}봉")
         if alloc:
             total_target += alloc * w
             head = f'*{asset}*  배분 {alloc:.0%}  ·  비중 `{w*100:.0f}%`  →  전체 `{alloc*w*100:.0f}%`{arrow}'
@@ -191,6 +193,7 @@ def build_daily(rows, accounts=None):
 
     lines.append(f'*목표 총 노출* `{total_target*100:.0f}%`  ·  현금 `{(1-total_target)*100:.0f}%`')
 
+    act = None
     if accounts is not None:
         krw = bithumb.available(accounts, 'KRW')
         holdings, total = [], krw
@@ -198,21 +201,41 @@ def build_daily(rows, accounts=None):
             q = bithumb.available(accounts, asset)
             v = q * last_krw if (q and last_krw) else 0.0
             total += v
-            if v > 0:
+            if alloc or v > 0:
                 holdings.append((asset, alloc, v))
         lines += ['', '*현재 보유*', f'   총 `{total:,.0f} KRW`  (현금 `{krw:,.0f}`)']
-        for asset, alloc, v in holdings:
-            cur_pct = v/total*100 if total else 0
-            tgt = next((a*s['weight']*100 for as_, a, s, _ in rows if as_ == asset), 0)
-            gap = (tgt - cur_pct)/100*total
-            note = ''
-            if alloc:
-                note = (f'  → 목표 {tgt:.0f}%  ({gap:+,.0f} KRW)'
-                        if abs(gap) >= config.MIN_ORDER_KRW else '  → 목표 근처')
-            lines.append(f'   {asset} `{v:,.0f}` ({cur_pct:.0f}%){note}')
 
-    if changed:
-        lines += ['', f'⚠️ *조정 필요* — {", ".join(changed)} 비중이 바뀌었습니다']
+        # 리밸런싱 밴드: 목표와 현재의 차이가 REBAL_BAND 미만이면 손대지 않는다.
+        # 잦은 소액 조정으로 수수료만 내는 것을 막는 규칙이다.
+        act = []
+        for asset, alloc, v in holdings:
+            cur = v / total if total else 0.0
+            tgt = next((a * s['weight'] for as_, a, s, _ in rows if as_ == asset), 0.0)
+            diff = tgt - cur                      # 비중 격차(0~1)
+            gap = diff * total                    # 금액 환산
+            note = f'  → 목표 {tgt*100:.0f}%'
+            if not alloc:
+                note = '  _관찰용_'
+            elif abs(diff) < config.REBAL_BAND:
+                note += f'  (격차 {diff*100:+.0f}%p — 밴드 내)'
+            elif abs(gap) < config.MIN_ORDER_KRW:
+                note += f'  ({gap:+,.0f} KRW — 최소 주문 미만)'
+            else:
+                note += f'  *{gap:+,.0f} KRW*'
+                act.append(f'{asset} {"매수" if gap > 0 else "매도"} {abs(gap):,.0f} KRW')
+            lines.append(f'   {asset} `{v:,.0f}` ({cur*100:.0f}%){note}')
+
+    if short:
+        lines += ['', f'🚨 *데이터 부족* — {", ".join(short)}. '
+                      f'장기 신호가 계산되지 않아 점수가 낮게 나올 수 있습니다']
+    if act:
+        lines += ['', f'⚠️ *리밸런싱* (밴드 {config.REBAL_BAND:.0%} 초과)']
+        lines += [f'   · {a}' for a in act]
+    elif act is not None:
+        lines += ['', f'_전 종목 밴드 {config.REBAL_BAND:.0%} 이내 — 조치 불필요_']
+    elif changed:
+        lines += ['', f'⚠️ *비중 변경* — {", ".join(changed)} '
+                      f'(보유 조회 불가로 리밸런싱 금액은 계산 못 함)']
     else:
         lines += ['', '_비중 변동 없음 — 조치 불필요_']
 

@@ -23,14 +23,21 @@ def _ema(series, span):
 
 
 def _rsi(close, period):
-    """Wilder 방식 RSI."""
+    """Wilder 방식 RSI.
+
+    구간에 손실이 하나도 없으면 RS 가 무한대가 된다. 이때 RSI 는 100 이지
+    결측이 아니다. 예전 구현은 0 을 pd.NA 로 바꿔 나눗셈을 피했는데,
+    그러면 시리즈가 object dtype 이 되고 float() 변환에서 터진다.
+    """
     delta = close.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0, pd.NA)
-    return 100 - (100 / (1 + rs))
+    avg_gain = delta.clip(lower=0).ewm(alpha=1 / period, adjust=False).mean()
+    avg_loss = (-delta.clip(upper=0)).ewm(alpha=1 / period, adjust=False).mean()
+
+    rsi = 100 - 100 / (1 + avg_gain / avg_loss.where(avg_loss > 0))
+    no_loss = avg_loss.notna() & (avg_loss <= 0)
+    rsi = rsi.mask(no_loss & (avg_gain > 0), 100.0)   # 상승만 있었다
+    rsi = rsi.mask(no_loss & (avg_gain <= 0), 50.0)   # 완전 횡보 — 중립
+    return rsi.astype(float)
 
 
 def _atr(df, period):
@@ -176,8 +183,24 @@ def analyze_daily(df):
     )
 
 
+def required_bars():
+    """세 신호가 모두 성립하는 데 필요한 최소 봉 수.
+
+    가장 긴 이동평균(MA200)이 값을 내려면 그만큼의 봉이 필요하고,
+    shift(1) 로 전일값을 쓰므로 한 봉을 더 본다.
+    """
+    return max(config.DAILY_MID, config.DAILY_SLOW, config.ST_PERIOD) + 1
+
+
 def daily_state(ds):
-    """마지막 일봉 기준 현재 상태. 리포트용 dict."""
+    """마지막 일봉 기준 현재 상태. 리포트용 dict.
+
+    봉이 모자라면 계산되지 않은 신호가 조용히 '꺼짐'으로 섞인다.
+    예를 들어 100봉만 있으면 MA200 이 없어 장기 신호가 항상 False 가 되고,
+    점수는 최대 0.80 에서 멈추는데 화면에는 그럴듯한 숫자로 보인다.
+    그래서 부족분을 값으로 드러내고, 쓰는 쪽에서 판단하게 한다.
+    """
+    have, need = len(ds.close), required_bars()
     return {
         'fast': bool(ds.sig_fast.iloc[-1]),
         'slow': bool(ds.sig_slow.iloc[-1]),
@@ -187,6 +210,9 @@ def daily_state(ds):
         'prev_weight': float(ds.weight.iloc[-2]) if len(ds.weight) > 1 else None,
         'rsi': float(ds.rsi.iloc[-1]),
         'close': float(ds.close.iloc[-1]),
+        'bars': have,
+        'bars_needed': need,
+        'insufficient': have < need,
     }
 
 
