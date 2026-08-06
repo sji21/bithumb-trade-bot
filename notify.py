@@ -1,12 +1,21 @@
 """텔레그램 전송."""
 
 import logging
+import os
 
 import requests
 
 import config
 
 _API = 'https://api.telegram.org/bot{token}/{method}'
+
+
+def _msg_id(response):
+    """전송 성공 응답에서 message_id 를 꺼낸다. 실패해도 로깅을 막지 않는다."""
+    try:
+        return response.json().get('result', {}).get('message_id')
+    except Exception:
+        return '?'
 
 
 def _configured():
@@ -37,6 +46,8 @@ def send_text(text):
                 timeout=10,
             )
         r.raise_for_status()
+        # 성공도 남긴다. 없으면 '보냈다는데 안 왔다' 를 확인할 방법이 없다.
+        logging.info('Telegram 메시지 전송 (id=%s)', _msg_id(r))
         return True
     except Exception as e:
         logging.exception('Telegram 전송 실패: %s', e)
@@ -57,6 +68,7 @@ def send_photo(path, caption=None):
         if r.status_code != 200:
             logging.warning('Telegram sendPhoto %s: %s', r.status_code, r.text[:200])
         r.raise_for_status()
+        logging.info('Telegram 사진 전송 (id=%s, %s)', _msg_id(r), os.path.basename(path))
         return True
     except Exception as e:
         logging.exception('Telegram 사진 전송 실패: %s', e)

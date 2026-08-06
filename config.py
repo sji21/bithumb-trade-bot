@@ -119,7 +119,9 @@ REBAL_BAND = _float_env('REBAL_BAND', 0.10)
 DAILY_CHART_DAYS = _int_env('DAILY_CHART_DAYS', 180)   # 차트에 보여줄 기간
 DAILY_HISTORY_DAYS = _int_env('DAILY_HISTORY_DAYS', 480)  # MA200 워밍업 포함 수집량
 # 일봉은 UTC 00:00 (KST 09:00) 에 마감된다. 그 직후 리포트를 보낸다.
-DAILY_REPORT_DELAY_MIN = _int_env('DAILY_REPORT_DELAY_MIN', 5)
+# 방금 닫힌 봉이 거래소에 아직 안 올라와 있을 수 있어 약간의 여유만 둔다.
+# (미완성 캔들 자체는 market.drop_unclosed 가 걸러내므로 길게 잡을 이유가 없다)
+DAILY_REPORT_DELAY_MIN = _int_env('DAILY_REPORT_DELAY_MIN', 1)
 
 
 def ensure_dirs():
