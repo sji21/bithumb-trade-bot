@@ -47,6 +47,7 @@ BTC 70% / ETH 30% 배분, SOL 은 차트만 관찰. 리밸런싱 밴드 10%p.
 ## 설정
 
 ```bash
+pip3 install -r requirements.txt
 cp .env.example .env   # 값을 채운다
 ```
 
@@ -77,11 +78,29 @@ launchctl kickstart -k gui/$(id -u)/ai.tradebot.bot   # 재시작
 | 매일 09:01 KST | **일봉 리포트.** 종목별 5단 차트 + 점수 · 목표 비중 · 리밸런싱 금액 |
 | 4시간마다 | 시세 확인용. **매매 판단에 쓰지 않는다** |
 
+## 테스트
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+표준 `unittest` 라 추가 의존성이 없고 네트워크도 쓰지 않는다. 31개 전부
+실제로 터졌던 버그에서 나왔다 — RSI 가 손실 0 구간에서 `pd.NA` 를 반환해
+리포트가 죽은 것, 워밍업 부족이 조용히 신호 꺼짐으로 섞인 것, 리밸런싱
+밴드가 구현되지 않았던 것. 새 버그를 찾는 게 아니라 고친 것이 다시
+무너지지 않게 하는 용도다.
+
 ## 백테스트
 
 ```bash
-python3 backtest.py --days 180
+python3 backtest.py --portfolio     # 채택 전략, docs 표를 재현한다
+python3 backtest.py                 # 종목별
+python3 backtest.py --legacy        # 폐기된 4시간봉 EMA 크로스
 ```
+
+`--portfolio` 출력은 [strategy.md](docs/strategy.md) 의 성과 표와 일치해야
+한다. 한동안 재현 수단이 없어 SOL 이 섞인 숫자가 문서에 실려 있었다
+([경위](docs/research-log.md#문서-숫자-정정)).
 
 봇이 실제로 쓰는 `strategy` 모듈을 그대로 불러 쓴다. 신호 로직을 따로 구현하면
 실매매와 어긋난 결과를 보게 되므로 의도적으로 재사용한다.

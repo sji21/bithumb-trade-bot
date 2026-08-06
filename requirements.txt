@@ -1,0 +1,11 @@
+# 2026-08-06 기준 실제 동작 확인된 조합.
+# 테스트는 표준 unittest 라 추가 의존성이 없다: python3 -m unittest discover -s tests
+
+ccxt==4.5.43              # 바이낸스 OHLCV
+pandas==2.3.3
+numpy==2.0.2
+matplotlib==3.9.4         # 차트 렌더 (Agg 백엔드)
+mplfinance==0.12.10b0     # 캔들 차트
+requests==2.32.5          # 빗썸 API · 텔레그램
+PyJWT==2.12.1             # 빗썸 Open API 2.0 인증 (HS256)
+python-dotenv==1.2.1
